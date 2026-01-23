@@ -1,0 +1,17 @@
+# Check that all userscripts have their install URLs in README.md
+missing=()
+while IFS= read -r -d '' file; do
+  relative_path="${file#./}"
+  raw_url="https://raw.githubusercontent.com/26d0/userscripts/main/${relative_path}"
+  if ! grep -qF "$raw_url" README.md; then
+    missing+=("$raw_url")
+  fi
+done < <(find src -name '*.user.js' -print0)
+
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "ERROR: The following userscript install URLs are missing from README.md:"
+  for url in "${missing[@]}"; do
+    echo "  - $url"
+  done
+  exit 1
+fi
