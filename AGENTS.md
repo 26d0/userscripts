@@ -20,7 +20,7 @@ This repository is a collection of userscripts.
 When adding a new userscript to README.md, use the following badge format:
 
 ```markdown
-[![Install](https://img.shields.io/badge/⬇️_Install-{Script_Name}-blue?style=for-the-badge&labelColor=0366d6&color=0a3069)](URL)
+[![Install](https://img.shields.io/badge/Install-{Script_Name}-blue?style=for-the-badge&labelColor=XXXXXX&color=XXXXXX)](URL)
 ```
 
 - Replace spaces in script name with underscores (`_`)
