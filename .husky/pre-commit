@@ -15,3 +15,24 @@ if [ ${#missing[@]} -gt 0 ]; then
   done
   exit 1
 fi
+
+# Check that staged userscripts have their @version updated if content changed
+version_missing=()
+for file in $(git diff --cached --name-only -- 'src/*.user.js'); do
+  # Check if there are changes other than the @version line
+  content_changed=$(git diff --cached -- "$file" | grep -E '^[+-]' | grep -v '^[+-]{3}' | grep -v '@version' | grep -v '^[+-][[:space:]]*$' | head -1)
+  # Check if @version line was changed
+  version_changed=$(git diff --cached -- "$file" | grep -E '^[+-].*@version')
+
+  if [ -n "$content_changed" ] && [ -z "$version_changed" ]; then
+    version_missing+=("$file")
+  fi
+done
+
+if [ ${#version_missing[@]} -gt 0 ]; then
+  echo "ERROR: The following userscripts have content changes but @version was not updated:"
+  for file in "${version_missing[@]}"; do
+    echo "  - $file"
+  done
+  exit 1
+fi
