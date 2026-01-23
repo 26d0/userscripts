@@ -1,4 +1,7 @@
-# Jime's userscript junkyard
+# JUJ
+JUJ stands for **J**UJ's **U**serscript **J**unkyard
+
+...or **J**imenshi's **U**serscript **J**unkyard
 
 ## How to Install
 
