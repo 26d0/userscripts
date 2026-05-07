@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud RSS Feed
 // @namespace    https://github.com/26d0/userscripts
-// @version      0.1.0
+// @version      0.3.0
 // @description  Get RSS feed URL for SoundCloud user pages
 // @match        https://soundcloud.com/*
 // @grant        none
@@ -30,131 +30,103 @@
   };
 
   // ===================
-  // Button Management
+  // User ID Cache
+  // username -> id, populated by fetch intercept
   // ===================
 
-  const btn = {
-    init() {
-      this.el = document.createElement("button");
-      this.el.innerHTML = ICONS.rss;
-      this.el.title = "Copy RSS feed URL";
-      this.el.classList.add("sc-button");
-      this.el.classList.add("sc-button-medium");
-      this.el.classList.add("sc-button-icon");
-      this.el.classList.add("sc-button-responsive");
-      this.el.classList.add("sc-button-secondary");
-    },
+  const userIdCache = {};
 
-    cb() {
-      // Try multiple selectors for different page layouts
-      const selectors = [
-        // User profile page - header action buttons
-        ".userInfoBar__buttons .sc-button-group",
-        ".profileHeaderInfo__buttons .sc-button-group",
-        ".userMain__headerButtons .sc-button-group",
-        // Generic button group in user header
-        ".soundHeader__actions .sc-button-group",
-        ".header__actions .sc-button-group",
-        // Fallback: any button group containing Follow/Station buttons
-        ".sc-button-group:has(.sc-button-follow)",
-        ".sc-button-group:has(.sc-button-station)",
-      ];
-
-      let par = null;
-      for (const selector of selectors) {
-        par = document.querySelector(selector);
-        if (par) {
-          console.log("[RSS] Found button container with selector:", selector);
-          break;
-        }
+  const origFetch = window.fetch.bind(window);
+  window.fetch = async function (...args) {
+    const response = await origFetch(...args);
+    try {
+      const url = typeof args[0] === "string" ? args[0] : (args[0]?.url ?? "");
+      if (url.includes("api-v2.soundcloud.com") && response.ok) {
+        response.clone().json().then((data) => {
+          // Single user object
+          if (data?.kind === "user" && data.id && data.permalink) {
+            userIdCache[data.permalink] = String(data.id);
+            console.log("[RSS] Cached user ID:", data.id, "->", data.permalink);
+          }
+          // Collection containing user objects (e.g. search results, followers)
+          if (Array.isArray(data?.collection)) {
+            for (const item of data.collection) {
+              if (item?.kind === "user" && item.id && item.permalink) {
+                userIdCache[item.permalink] = String(item.id);
+              }
+            }
+          }
+        }).catch(() => {});
       }
-
-      if (par && this.el.parentElement !== par) {
-        par.insertAdjacentElement("beforeend", this.el);
-      }
-    },
-
-    attach() {
-      this.detach();
-      this.observer = new MutationObserver(this.cb.bind(this));
-      this.observer.observe(document.body, { childList: true, subtree: true });
-      this.cb();
-    },
-
-    detach() {
-      if (this.observer) {
-        this.observer.disconnect();
-      }
-    },
+    } catch (_) {}
+    return response;
   };
-
-  btn.init();
 
   // ===================
   // Utility Functions
   // ===================
 
-  function hook(obj, name, callback, type) {
-    const fn = obj[name];
-    obj[name] = function (...args) {
-      if (type === "before") callback.apply(this, args);
-      fn.apply(this, args);
-      if (type === "after") callback.apply(this, args);
-    };
-    return () => {
-      obj[name] = fn;
-    };
-  }
-
   function isUserPage() {
     const excludedPaths = [
-      "/you",
-      "/stations",
-      "/discover",
-      "/stream",
-      "/upload",
-      "/search",
-      "/settings",
-      "/messages",
-      "/notifications",
-      "/charts",
-      "/people",
-      "/pages",
-      "/pro",
-      "/jobs",
-      "/creators",
-      "/terms-of-use",
-      "/privacy",
+      "/you", "/stations", "/discover", "/stream", "/upload",
+      "/search", "/settings", "/messages", "/notifications",
+      "/charts", "/people", "/pages", "/pro", "/jobs",
+      "/creators", "/terms-of-use", "/privacy",
     ];
-
     const pathname = location.pathname;
-
-    // Check if it's an excluded path
     for (const excluded of excludedPaths) {
-      if (pathname.startsWith(excluded)) {
-        return false;
-      }
+      if (pathname.startsWith(excluded)) return false;
     }
-
-    // User page pattern: /username or /username/tracks etc.
-    // Should have at least one path segment that looks like a username
     const match = pathname.match(/^\/([^/]+)/);
-    if (!match) return false;
-
-    const username = match[1];
-    // Username should not be empty
-    return username.length > 0;
+    return match ? match[1].length > 0 : false;
   }
 
-  function extractUsername() {
+  function currentUsername() {
     const match = location.pathname.match(/^\/([^/]+)/);
     return match ? match[1] : null;
   }
 
+  function findButtonContainer() {
+    const selectors = [
+      ".userInfoBar__buttons .sc-button-group",
+      ".profileHeaderInfo__buttons .sc-button-group",
+      ".userMain__headerButtons .sc-button-group",
+      ".soundHeader__actions .sc-button-group",
+      ".header__actions .sc-button-group",
+      ".sc-button-group:has(.sc-button-follow)",
+      ".sc-button-group:has(.sc-button-station)",
+    ];
+    for (const selector of selectors) {
+      const el = document.querySelector(selector);
+      if (el) return el;
+    }
+    return null;
+  }
+
   function extractUserId() {
-    const html = document.documentElement.innerHTML;
-    const match = html.match(/soundcloud:\/\/users:(\d+)/);
-    return match ? match[1] : null;
+    const username = currentUsername();
+
+    // 1. fetch intercept cache (most accurate for SPA)
+    if (username && userIdCache[username]) {
+      return userIdCache[username];
+    }
+
+    // 2. app-link meta tags (updated by React Helmet on SPA nav)
+    for (const prop of ["al:ios:url", "al:android:url"]) {
+      const meta = document.querySelector(`meta[property="${prop}"]`);
+      if (meta) {
+        const m = meta.getAttribute("content").match(/soundcloud:\/\/users:(\d+)/);
+        if (m) return m[1];
+      }
+    }
+
+    // 3. window.__sc_hydration (reliable on hard load, stale on SPA nav)
+    if (window.__sc_hydration) {
+      const entry = window.__sc_hydration.find((e) => e.hydratable === "user");
+      if (entry?.data?.id) return String(entry.data.id);
+    }
+
+    return null;
   }
 
   function buildRssFeedUrl(userId) {
@@ -162,62 +134,62 @@
   }
 
   // ===================
-  // Main Logic
+  // Button
   // ===================
 
-  function load(by) {
-    btn.detach();
-    console.log("[RSS] load triggered by:", by, location.href);
+  const btn = document.createElement("button");
+  btn.innerHTML = ICONS.rss;
+  btn.title = "Copy RSS feed URL";
+  btn.classList.add("sc-button", "sc-button-medium", "sc-button-icon", "sc-button-responsive", "sc-button-secondary");
 
+  btn.addEventListener("click", async () => {
+    const userId = extractUserId();
+    if (!userId) {
+      console.warn("[RSS] Could not find user ID for:", currentUsername());
+      btn.innerHTML = ICONS.error;
+      setTimeout(() => { btn.innerHTML = ICONS.rss; }, 2000);
+      return;
+    }
+
+    const rssUrl = buildRssFeedUrl(userId);
+    console.log("[RSS] RSS Feed URL:", rssUrl);
+
+    try {
+      await navigator.clipboard.writeText(rssUrl);
+      btn.innerHTML = ICONS.check;
+    } catch (err) {
+      console.error("[RSS] Failed to copy to clipboard:", err);
+      btn.innerHTML = ICONS.error;
+    }
+
+    setTimeout(() => { btn.innerHTML = ICONS.rss; }, 2000);
+  });
+
+  // ===================
+  // DOM Insertion
+  // ===================
+
+  function update() {
     if (!isUserPage()) {
-      console.log("[RSS] Not a user page, skipping");
+      btn.remove();
       return;
     }
-
-    const username = extractUsername();
-    if (!username) {
-      console.log("[RSS] Could not extract username");
-      return;
+    const par = findButtonContainer();
+    if (par && btn.parentElement !== par) {
+      par.insertAdjacentElement("beforeend", btn);
+      console.log("[RSS] Button inserted for:", currentUsername());
     }
-
-    console.log("[RSS] Detected user page for:", username);
-
-    btn.el.onclick = async () => {
-      const userId = extractUserId();
-      if (!userId) {
-        console.log("[RSS] Could not find user ID in page");
-        btn.el.innerHTML = ICONS.error;
-        setTimeout(() => {
-          btn.el.innerHTML = ICONS.rss;
-        }, 2000);
-        return;
-      }
-
-      const rssUrl = buildRssFeedUrl(userId);
-      console.log("[RSS] RSS Feed URL:", rssUrl);
-
-      try {
-        await navigator.clipboard.writeText(rssUrl);
-        btn.el.innerHTML = ICONS.check;
-      } catch (err) {
-        console.error("[RSS] Failed to copy to clipboard:", err);
-        btn.el.innerHTML = ICONS.error;
-      }
-
-      setTimeout(() => {
-        btn.el.innerHTML = ICONS.rss;
-      }, 2000);
-    };
-
-    btn.attach();
-    console.log("[RSS] Button attached");
   }
 
-  // ===================
-  // Initialization
-  // ===================
+  const observer = new MutationObserver(update);
+  observer.observe(document.body, { childList: true, subtree: true });
 
-  load("init");
-  hook(history, "pushState", () => load("pushState"), "after");
-  window.addEventListener("popstate", () => load("popstate"));
+  const origPushState = history.pushState.bind(history);
+  history.pushState = function (...args) {
+    origPushState(...args);
+    update();
+  };
+  window.addEventListener("popstate", update);
+
+  update();
 })();
